@@ -43,11 +43,58 @@ jobs:
       - name: build wget
         working-directory: ./wget
         run: |
-          ./bootstrap
+          ./bootstrap --skip-po --no-bootstrap-sync
           autoreconf -fi
           ./configure --with-ssl=openssl --with-libssl-prefix=${RUNNER_TEMP}/tongsuo --disable-ntlm
           make -s -j4
-
+  build-on-windows:
+    name: "build-windows-latest"
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          location: ${{ runner.temp }}
+      - name: install dependencies
+        shell: msys2 {0}
+        run: |
+          pacman -S --noconfirm base-devel msys2-runtime-devel mingw-w64-x86_64-toolchain autoconf automake git gperf pkg-config autoconf-archive gcc
+          ls -l ${RUNNER_TEMP}
+          find ${RUNNER_TEMP} -type d -name openssl
+          rm -rf ${RUNNER_TEMP}/msys64/mingw64/include/openssl
+          ls -l ${RUNNER_TEMP}/msys64/mingw64/include/
+      - name: checkout tongsuo
+        uses: actions/checkout@v2
+        with:
+          repository: Tongsuo-Project/Tongsuo
+          ref: 8.3-stable
+          path: Tongsuo
+      - name: Build Tongsuo
+        working-directory: ./Tongsuo
+        shell: msys2 {0}
+        run: |
+          ./Configure mingw64 enable-ntls no-shared no-asm --prefix=${RUNNER_TEMP}/tongsuo
+          make depend
+          make -s -j4
+          make install_sw
+      - uses: actions/checkout@v3
+        with:
+          path: wget
+      - name: build wget
+        shell: msys2 {0}
+        working-directory: ./wget
+        run: |
+          tongsuo_home=`cd ${RUNNER_TEMP}/tongsuo && pwd`
+          ./bootstrap --skip-po --no-bootstrap-sync
+          autoreconf -fi
+          CFLAGS="-D_WIN32_WINNT=0x0601" LIBS="-lbcrypt -lcrypt32" ./configure --host=mingw32 --with-ssl=openssl --with-libssl-prefix=${tongsuo_home} --disable-ntlm
+          make -s -j4
+      - name: debug
+        if: ${{ failure() }}
+        shell: msys2 {0}
+        working-directory: ./wget
+        run: |
+          cat config.log
   Check:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -80,7 +127,7 @@ jobs:
       - name: build wget
         working-directory: ./wget
         run: |
-          ./bootstrap
+          ./bootstrap --skip-po --no-bootstrap-sync
           autoreconf -fi
           ./configure --with-ssl=openssl --with-libssl-prefix=${RUNNER_TEMP}/tongsuo --disable-ntlm
           make -s -j4

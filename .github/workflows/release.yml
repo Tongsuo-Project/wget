@@ -1,0 +1,131 @@
+name: release
+
+on:
+  workflow_dispatch:
+    tags:
+      - '*'
+env:
+  TONGSUO_VERSION: 8.3.2
+
+jobs:
+  new_release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body: |
+            Changes in this Release
+            - First Change
+            - Second Change
+          draft: true
+          prerelease: true
+  build_linux_macos:
+    runs-on: ${{ matrix.builder }}
+    needs: [new_release]
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        builder: [macos-latest, ubuntu-latest]
+    name: "build-${{ matrix.builder }}"
+    steps:
+      - name: install dependencies on Linux
+        if: ${{ matrix.builder == 'ubuntu-latest' }}
+        run: |
+          sudo apt-get install -y automake autoconf autoconf-archive autopoint \
+            flex texinfo gperf pkg-config make libhttp-daemon-perl \
+            libio-socket-ssl-perl libidn2-dev gettext texlive python3 valgrind \
+            language-pack-tr language-pack-ru
+      - name: 'brew bundle'
+        if: ${{ matrix.builder == 'macos-latest' }}
+        run: |
+          echo libtool automake autoconf autoconf-archive | xargs -Ix -n1 echo brew '"x"' > /tmp/Brewfile
+      - name: 'brew install'
+        if: ${{ matrix.builder == 'macos-latest' }}
+        run: brew update && for i in 1 2 3; do brew bundle install --no-lock --file /tmp/Brewfile && break || sleep 1; done
+      - name: build Tongsuo
+        run: |
+          wget "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz"
+          tar zxf "${TONGSUO_VERSION}.tar.gz"
+          pushd "Tongsuo-${TONGSUO_VERSION}"
+          ./config --prefix=${RUNNER_TEMP}/tongsuo no-shared enable-ntls --release
+          make -s -j4
+          make install_sw
+          popd
+      - uses: actions/checkout@v3
+        with:
+          path: wget
+      - name: build wget
+        working-directory: ./wget
+        run: |
+          ./bootstrap --skip-po --no-bootstrap-sync
+          autoreconf -fi
+          ./configure --prefix=${RUNNER_TEMP}/wget --with-ssl=openssl --with-libssl-prefix=${RUNNER_TEMP}/tongsuo --disable-ntlm
+          make -s -j4
+          make install
+          find ${RUNNER_TEMP}/wget -type f -name wget
+      - name: upload artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ needs.new_release.outputs.upload_url }}
+          asset_path: ${{ runner.temp }}/wget/bin/wget
+          asset_name: wget-${{ runner.os }}
+          asset_content_type: application/octet-stream
+  build_windows:
+    runs-on: windows-latest
+    needs: [new_release]
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          location: ${{ runner.temp }}
+      - name: install dependencies
+        shell: msys2 {0}
+        run: |
+          pacman -S --noconfirm base-devel msys2-runtime-devel mingw-w64-x86_64-toolchain autoconf automake git gperf pkg-config autoconf-archive gcc
+          ls -l ${RUNNER_TEMP}
+          find ${RUNNER_TEMP} -type d -name openssl
+          rm -rf ${RUNNER_TEMP}/msys64/mingw64/include/openssl
+          ls -l ${RUNNER_TEMP}/msys64/mingw64/include/
+      - name: build Tongsuo
+        shell: msys2 {0}
+        run: |
+          wget "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz"
+          tar zxf "${TONGSUO_VERSION}.tar.gz"
+          pushd "Tongsuo-${TONGSUO_VERSION}"
+          ./Configure mingw64 enable-ntls no-shared --release --prefix=${RUNNER_TEMP}/tongsuo
+          make depend
+          make -s -j4
+          make install_sw
+          popd
+      - uses: actions/checkout@v3
+        with:
+          path: wget
+      - name: build wget
+        shell: msys2 {0}
+        working-directory: ./wget
+        run: |
+          runner_temp=`cd ${RUNNER_TEMP} && pwd`
+          ./bootstrap --skip-po --no-bootstrap-sync
+          autoreconf -fi
+          CFLAGS="-D_WIN32_WINNT=0x0601" LIBS="-lbcrypt -lcrypt32" ./configure --prefix=${runner_temp}/wget --host=mingw32 --with-ssl=openssl --with-libssl-prefix=${runner_temp}/tongsuo --disable-ntlm
+          make -s -j4
+          make install
+          find ${RUNNER_TEMP}/wget -type f -name wget.exe
+      - name: upload artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ needs.new_release.outputs.upload_url }}
+          asset_path: ${{ runner.temp }}/wget/bin/wget.exe
+          asset_name: wget-${{ runner.os }}.exe
+          asset_content_type: application/octet-stream
