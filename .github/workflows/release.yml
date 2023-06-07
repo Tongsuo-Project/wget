@@ -55,19 +55,159 @@ jobs:
           wget "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz"
           tar zxf "${TONGSUO_VERSION}.tar.gz"
           pushd "Tongsuo-${TONGSUO_VERSION}"
-          ./config --prefix=${RUNNER_TEMP}/tongsuo no-shared enable-ntls --release
+          ./config --prefix=${RUNNER_TEMP}/tongsuo no-shared no-dso no-threads enable-ntls --release
           make -s -j4
           make install_sw
+          popd
+      - name: build libgpg-error
+        run: |
+          wget -nc https://www.gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.45.tar.gz
+          tar xzf libgpg-error-1.45.tar.gz
+          pushd libgpg-error-1.45
+          ./configure \
+          --disable-shared \
+          --prefix="${RUNNER_TEMP}/libgpg-error" \
+          --enable-static \
+          --disable-doc
+          make -s -j4
+          make install
+      - name: build libexpat
+        run: |
+          wget -nc https://github.com/libexpat/libexpat/releases/download/R_2_4_8/expat-2.4.8.tar.gz
+          tar xzf expat-2.4.8.tar.gz
+          pushd expat-2.4.8
+          ./configure \
+          --disable-shared \
+          --prefix="${RUNNER_TEMP}/libexpat" \
+          --enable-static \
+          --without-docbook \
+          --without-tests \
+          --with-libgpg-error-prefix="${RUNNER_TEMP}/libgpg-error"
+          make -s -j4
+          make install
+          popd
+      - name: build libmetalink
+        run: |
+          wget -nc https://github.com/metalink-dev/libmetalink/releases/download/release-0.1.3/libmetalink-0.1.3.tar.gz
+          tar xzf libmetalink-0.1.3.tar.gz
+          pushd libmetalink-0.1.3
+          EXPAT_CFLAGS="-I${RUNNER_TEMP}/libexpat/include" \
+          EXPAT_LIBS="-L${RUNNER_TEMP}/libexpat/lib -lexpat" \
+          ./configure \
+          --disable-shared \
+          --prefix="${RUNNER_TEMP}/libmetalink" \
+          --enable-static \
+          --with-libgpg-error-prefix="${RUNNER_TEMP}/libgpg-error" \
+          --with-libexpat
+          make -s -j4
+          make install
+          popd
+      - name: build libunistring
+        run: |
+          wget -nc https://ftp.gnu.org/gnu/libunistring/libunistring-1.1.tar.gz
+          tar zxf libunistring-1.1.tar.gz
+          pushd libunistring-1.1
+          ./configure \
+          --prefix=${RUNNER_TEMP}/libunistring \
+          --disable-shared
+          make -s -j4
+          make install
+          popd
+      - name: build libpcre2
+        run: |
+          wget -nc https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.40/pcre2-10.40.tar.gz
+          tar xzf pcre2-10.40.tar.gz
+          pushd pcre2-10.40
+          ./configure \
+          --disable-shared \
+          --prefix=${RUNNER_TEMP}/libpcre2 \
+          --enable-static
+          make -s -j4
+          make install
+          popd
+      - name: build libiconv
+        run: |
+          wget -nc https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz
+          tar xzf libiconv-1.17.tar.gz
+          pushd libiconv-1.17
+          ./configure \
+          --disable-shared \
+          --prefix=${RUNNER_TEMP}/libiconv \
+          --enable-static
+          make -s -j4
+          make install
+          popd
+      - name: build gettext (libintl)
+        if: ${{ matrix.builder == 'macos-latest' }}
+        run: |
+          wget -nc https://ftp.gnu.org/pub/gnu/gettext/gettext-0.21.1.tar.gz
+          tar xzf gettext-0.21.1.tar.gz
+          pushd gettext-0.21.1
+          ./configure \
+          --disable-shared \
+          --prefix=${RUNNER_TEMP}/gettext \
+          --enable-static \
+          --disable-java \
+          --disable-c++
+          make -s -j4
+          make install
           popd
       - uses: actions/checkout@v3
         with:
           path: wget
-      - name: build wget
+      - name: build wget (ubuntu)
+        if: ${{ matrix.builder == 'ubuntu-latest' }}
         working-directory: ./wget
         run: |
           ./bootstrap --skip-po --no-bootstrap-sync
           autoreconf -fi
-          ./configure --prefix=${RUNNER_TEMP}/wget --with-ssl=openssl --with-libssl-prefix=${RUNNER_TEMP}/tongsuo --disable-ntlm
+          CFLAGS="-DPCRE2_STATIC=1 -I${RUNNER_TEMP}/libunistring/include -I${RUNNER_TEMP}/libiconv/include" \
+          LDFLAGS="-L${RUNNER_TEMP}/libunistring/lib -lunistring -L${RUNNER_TEMP}/libiconv/lib -liconv" \
+          PCRE2_CFLAGS="-I${RUNNER_TEMP}/libpcre2/include" \
+          PCRE2_LIBS="-L${RUNNER_TEMP}/libpcre2/lib -lpcre2-8" \
+          METALINK_CFLAGS="-I${RUNNER_TEMP}/libmetalink/include" \
+          METALINK_LIBS="-L${RUNNER_TEMP}/libmetalink/lib -lmetalink -L${RUNNER_TEMP}/libexpat/lib -lexpat" \
+          ./configure \
+          --prefix=${RUNNER_TEMP}/wget \
+          --with-ssl=openssl \
+          --with-libssl-prefix=${RUNNER_TEMP}/tongsuo \
+          --without-zlib \
+          --without-libiconv-prefix \
+          --disable-iri \
+          --disable-ntlm \
+          --disable-pcre \
+          --without-libpsl \
+          --without-libuuid \
+          --without-libintl-prefix \
+          --with-included-libunistring
+          make -s -j4
+          make install
+          find ${RUNNER_TEMP}/wget -type f -name wget
+      - name: build wget (macos)
+        if: ${{ matrix.builder == 'macos-latest' }}
+        working-directory: ./wget
+        run: |
+          ./bootstrap --skip-po --no-bootstrap-sync
+          autoreconf -fi
+          CFLAGS="-DPCRE2_STATIC=1 -I${RUNNER_TEMP}/libunistring/include -I${RUNNER_TEMP}/libiconv/include" \
+          LDFLAGS="-L${RUNNER_TEMP}/libunistring/lib -lunistring -L${RUNNER_TEMP}/libiconv/lib -liconv ${RUNNER_TEMP}/gettext/lib/libintl.a" \
+          PCRE2_CFLAGS="-I${RUNNER_TEMP}/libpcre2/include" \
+          PCRE2_LIBS="-L${RUNNER_TEMP}/libpcre2/lib -lpcre2-8" \
+          METALINK_CFLAGS="-I${RUNNER_TEMP}/libmetalink/include" \
+          METALINK_LIBS="-L${RUNNER_TEMP}/libmetalink/lib -lmetalink -L${RUNNER_TEMP}/libexpat/lib -lexpat" \
+          ./configure \
+          --prefix=${RUNNER_TEMP}/wget \
+          --with-ssl=openssl \
+          --with-libssl-prefix=${RUNNER_TEMP}/tongsuo \
+          --without-zlib \
+          --without-libiconv-prefix \
+          --disable-iri \
+          --disable-ntlm \
+          --disable-pcre \
+          --without-libpsl \
+          --without-libuuid \
+          --without-libintl-prefix \
+          --with-included-libunistring
           make -s -j4
           make install
           find ${RUNNER_TEMP}/wget -type f -name wget
@@ -80,6 +220,11 @@ jobs:
           asset_path: ${{ runner.temp }}/wget/bin/wget
           asset_name: wget-${{ runner.os }}
           asset_content_type: application/octet-stream
+      - name: debug
+        if: ${{ failure() }}
+        working-directory: ./wget
+        run: |
+          cat config.log
   build_windows:
     runs-on: windows-latest
     needs: [new_release]
@@ -90,21 +235,100 @@ jobs:
       - name: install dependencies
         shell: msys2 {0}
         run: |
-          pacman -S --noconfirm base-devel msys2-runtime-devel mingw-w64-x86_64-toolchain autoconf automake git gperf pkg-config autoconf-archive gcc
+          pacman -S --noconfirm base-devel msys2-runtime-devel mingw-w64-x86_64-toolchain autoconf automake git gperf pkg-config autoconf-archive gcc gettext
           ls -l ${RUNNER_TEMP}
           find ${RUNNER_TEMP} -type d -name openssl
           rm -rf ${RUNNER_TEMP}/msys64/mingw64/include/openssl
           ls -l ${RUNNER_TEMP}/msys64/mingw64/include/
+      - name: Set env
+        shell: msys2 {0}
+        run: echo "RUN_TEMP=$(cd ${RUNNER_TEMP} && pwd)" >> $GITHUB_ENV
       - name: build Tongsuo
         shell: msys2 {0}
         run: |
           wget "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/${TONGSUO_VERSION}.tar.gz"
           tar zxf "${TONGSUO_VERSION}.tar.gz"
           pushd "Tongsuo-${TONGSUO_VERSION}"
-          ./Configure mingw64 enable-ntls no-shared --release --prefix=${RUNNER_TEMP}/tongsuo
+          ./Configure mingw64 enable-ntls no-shared no-dso no-threads --release --prefix=${RUN_TEMP}/tongsuo
           make depend
           make -s -j4
           make install_sw
+          popd
+      - name: build libexpat
+        shell: msys2 {0}
+        run: |
+          wget -nc https://github.com/libexpat/libexpat/releases/download/R_2_4_8/expat-2.4.8.tar.gz
+          tar xzf expat-2.4.8.tar.gz
+          pushd expat-2.4.8
+          ./configure \
+          --host=mingw32 \
+          --disable-shared \
+          --prefix=${runner_temp}/libexpat \
+          --enable-static \
+          --without-docbook \
+          --without-tests \
+          --with-libgpg-error-prefix=${RUN_TEMP}/libexpat
+          make -s -j4
+          make install
+          popd
+      - name: build libmetalink
+        shell: msys2 {0}
+        run: |
+          wget -nc https://github.com/metalink-dev/libmetalink/releases/download/release-0.1.3/libmetalink-0.1.3.tar.gz
+          tar xzf libmetalink-0.1.3.tar.gz
+          pushd libmetalink-0.1.3
+          EXPAT_CFLAGS="-I${RUN_TEMP}/libexpat/include" \
+          EXPAT_LIBS="-L${RUN_TEMP}/libexpat/lib -lexpat" \
+          ./configure \
+          --host=mingw32 \
+          --disable-shared \
+          --prefix="${RUN_TEMP}/libmetalink" \
+          --enable-static \
+          --with-libgpg-error-prefix="${RUN_TEMP}/libmetalink" \
+          --with-libexpat
+          make -s -j4
+          make install
+          popd
+      - name: build libunistring
+        shell: msys2 {0}
+        run: |
+          wget -nc https://ftp.gnu.org/gnu/libunistring/libunistring-1.1.tar.gz
+          tar zxf libunistring-1.1.tar.gz
+          pushd libunistring-1.1
+          ./configure \
+          --host=mingw32 \
+          --prefix=${RUN_TEMP}/libunistring \
+          --disable-shared
+          make -s -j4
+          make install
+          popd
+      - name: build libpcre2
+        shell: msys2 {0}
+        run: |
+          wget -nc https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.40/pcre2-10.40.tar.gz
+          tar xzf pcre2-10.40.tar.gz
+          pushd pcre2-10.40
+          ./configure \
+          --host=mingw32 \
+          --disable-shared \
+          --prefix=${RUN_TEMP}/libpcre2 \
+          --enable-static
+          make -s -j4
+          make install
+          popd
+      - name: build libiconv
+        shell: msys2 {0}
+        run: |
+          wget -nc https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz
+          tar xzf libiconv-1.17.tar.gz
+          pushd libiconv-1.17
+          ./configure \
+          --host=mingw32 \
+          --disable-shared \
+          --prefix=${RUN_TEMP}/libiconv \
+          --enable-static
+          make -s -j4
+          make install
           popd
       - uses: actions/checkout@v3
         with:
@@ -113,19 +337,44 @@ jobs:
         shell: msys2 {0}
         working-directory: ./wget
         run: |
-          runner_temp=`cd ${RUNNER_TEMP} && pwd`
           ./bootstrap --skip-po --no-bootstrap-sync
           autoreconf -fi
-          CFLAGS="-D_WIN32_WINNT=0x0601" LIBS="-lbcrypt -lcrypt32" ./configure --prefix=${runner_temp}/wget --host=mingw32 --with-ssl=openssl --with-libssl-prefix=${runner_temp}/tongsuo --disable-ntlm
+          CFLAGS="-D_WIN32_WINNT=0x0601 -DPCRE2_STATIC=1 -I${RUN_TEMP}/libunistring/include -I${RUN_TEMP}/libiconv/include" \
+          LDFLAGS="-L${RUN_TEMP}/libunistring/lib -lunistring -L${RUN_TEMP}/libiconv/lib -liconv -static -static-libgcc" \
+          PCRE2_CFLAGS="-I${RUN_TEMP}/libpcre2/include" \
+          PCRE2_LIBS="-L${RUN_TEMP}/libpcre2/lib -lpcre2-8" \
+          METALINK_CFLAGS="-I${RUN_TEMP}/libmetalink/include" \
+          METALINK_LIBS="-L${RUN_TEMP}/libmetalink/lib -lmetalink -L${RUN_TEMP}/libexpat/lib -lexpat" \
+          LIBS="-lbcrypt -lcrypt32" \
+          ./configure \
+          --prefix=${RUN_TEMP}/wget \
+          --host=mingw32 \
+          --with-ssl=openssl \
+          --with-libssl-prefix=${RUN_TEMP}/tongsuo \
+          --without-zlib \
+          --without-libiconv-prefix \
+          --disable-iri \
+          --disable-ntlm \
+          --disable-pcre \
+          --without-libpsl \
+          --without-libuuid \
+          --without-libintl-prefix \
+          --with-included-libunistring
           make -s -j4
           make install
-          find ${RUNNER_TEMP}/wget -type f -name wget.exe
+          find ${RUN_TEMP}/wget -type f -name wget.exe
       - name: upload artifact
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           upload_url: ${{ needs.new_release.outputs.upload_url }}
-          asset_path: ${{ runner.temp }}/wget/bin/wget.exe
+          asset_path: ${{ runner.temp }}\wget\bin\wget.exe
           asset_name: wget-${{ runner.os }}.exe
           asset_content_type: application/octet-stream
+      - name: debug
+        if: ${{ failure() }}
+        shell: msys2 {0}
+        working-directory: ./wget
+        run: |
+          cat config.log
